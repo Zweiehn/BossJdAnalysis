@@ -9,7 +9,9 @@ screenshots/
 
 # === PyInstaller 构建输出 ===
 dist/
+dist_new/
 build/
+build_new/
 *.spec
 
 # === Python 缓存 ===

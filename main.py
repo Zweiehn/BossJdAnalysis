@@ -20,7 +20,7 @@ from config import Config, get_app_dir
 from models import JDRecord
 from screenshot_manager import ScreenshotManager
 from excel_writer import ExcelWriter
-from ocr.paddle_ocr_impl import PaddleOCREngine
+from ocr.paddle_subprocess_impl import PaddleSubprocessEngine
 from ai.deepseek_impl import DeepSeekAI
 from feishu_sync import FeishuSyncer
 
@@ -646,7 +646,14 @@ class JDAnalyzerApp:
         # 2. OCR 识别
         self.log("  🔍 OCR 识别中...")
         if self.ocr_engine is None:
-            self.ocr_engine = PaddleOCREngine(lang=self.config.ocr_lang)
+            # 本地脚本 → 直接使用 PaddleOCR（高性能）
+            # 打包 exe → 子进程模式（避免打包问题）
+            if getattr(sys, "frozen", False):
+                engine_cls = PaddleSubprocessEngine
+            else:
+                from ocr.paddle_ocr_impl import PaddleOCREngine
+                engine_cls = PaddleOCREngine
+            self.ocr_engine = engine_cls(lang=self.config.ocr_lang)
             self.log(f"  🤖 OCR 引擎: {self.ocr_engine.get_name()}")
 
         raw_text = self.ocr_engine.extract_text(saved_path)
