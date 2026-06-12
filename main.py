@@ -443,16 +443,55 @@ class JDAnalyzerApp:
         btn_frame = Frame(win)
         btn_frame.pack(fill=X, padx=15)
 
+        def _extract_text_from_file(path: str) -> str:
+            ext = os.path.splitext(path)[1].lower()
+            try:
+                if ext == ".txt":
+                    with open(path, "r", encoding="utf-8", errors="ignore") as f:
+                        return f.read()
+                elif ext == ".md":
+                    with open(path, "r", encoding="utf-8", errors="ignore") as f:
+                        return f.read()
+                elif ext == ".docx":
+                    from docx import Document
+                    doc = Document(path)
+                    return "\n".join(p.text for p in doc.paragraphs if p.text.strip())
+                elif ext == ".pdf":
+                    import fitz
+                    doc = fitz.open(path)
+                    text = ""
+                    for page in doc:
+                        text += page.get_text()
+                    doc.close()
+                    return text
+                else:
+                    # 尝试当文本读
+                    with open(path, "r", encoding="utf-8", errors="ignore") as f:
+                        return f.read()
+            except Exception as e:
+                raise RuntimeError(f"读取文件失败 [{os.path.basename(path)}]: {e}")
+
         def _load_from_file():
             path = filedialog.askopenfilename(
                 title="选择简历文件",
-                filetypes=[("文本文件", "*.txt"), ("所有文件", "*.*")],
+                filetypes=[
+                    ("常用格式", "*.txt *.md *.docx *.pdf"),
+                    ("文本文件", "*.txt"),
+                    ("Markdown", "*.md"),
+                    ("Word 文档", "*.docx"),
+                    ("PDF 文档", "*.pdf"),
+                    ("所有文件", "*.*"),
+                ],
             )
             if path:
-                with open(path, "r", encoding="utf-8", errors="ignore") as f:
+                try:
+                    content = _extract_text_from_file(path)
+                    txt.config(state=NORMAL)
                     txt.delete("1.0", END)
-                    txt.insert("1.0", f.read())
-                self.log(f"📄 已加载简历文件: {os.path.basename(path)}")
+                    txt.insert("1.0", content)
+                    self.log(f"📄 已加载简历: {os.path.basename(path)} ({len(content)} 字)")
+                except Exception as e:
+                    messagebox.showerror("读取失败", str(e))
 
         Button(btn_frame, text="📂 从文件导入", command=_load_from_file,
                font=("微软雅黑", 9), width=14).pack(side=LEFT, padx=2)
