@@ -23,6 +23,7 @@ from excel_writer import ExcelWriter
 from ocr.paddle_subprocess_impl import PaddleSubprocessEngine
 from ai.deepseek_impl import DeepSeekAI
 from feishu_sync import FeishuSyncer
+from resume_manager import ResumeManager
 
 
 class JDAnalyzerApp:
@@ -38,6 +39,7 @@ class JDAnalyzerApp:
         self.config = Config()
         self.screenshot_mgr = ScreenshotManager(self.config)
         self.excel_writer = ExcelWriter(self.config)
+        self.resume_mgr = ResumeManager(self.config)
 
         # OCR 引擎 (延迟初始化)
         self.ocr_engine = None
@@ -97,6 +99,12 @@ class JDAnalyzerApp:
         )
         self.btn_feishu.pack(side=LEFT, padx=2)
 
+        self.btn_resume = Button(
+            toolbar, text="📄 简历", command=self._import_resume,
+            width=8, height=1, font=("微软雅黑", 10),
+        )
+        self.btn_resume.pack(side=LEFT, padx=2)
+
         self.btn_config = Button(
             toolbar, text="⚙ 配置", command=self._open_config_window,
             width=8, height=1, font=("微软雅黑", 10),
@@ -124,6 +132,14 @@ class JDAnalyzerApp:
             font=("微软雅黑", 8), anchor="w", fg="#888",
         )
         self.lbl_excel_path.pack(fill=X)
+
+        # 简历状态显示
+        self.lbl_resume = Label(
+            status_frame,
+            text=f"📄 {self.resume_mgr.get_profile_summary()}",
+            font=("微软雅黑", 8), anchor="w", fg="#888",
+        )
+        self.lbl_resume.pack(fill=X)
 
         # ── 文件列表 ──
         list_frame = Frame(self.root, padx=10, pady=4)
@@ -405,6 +421,124 @@ class JDAnalyzerApp:
         else:
             messagebox.showerror("连接失败", result)
 
+    # ──────────────── 简历管理 ────────────────
+
+    def _import_resume(self):
+        """导入/管理简历"""
+        if not self.config.deepseek_api_key:
+            messagebox.showerror("提示", "请先在配置中填写 DeepSeek API Key")
+            return
+
+        win = Toplevel(self.root)
+        win.title("简历管理")
+        win.geometry("560x450")
+        win.minsize(500, 350)
+        win.transient(self.root)
+        win.grab_set()
+
+        # 简历文本输入
+        Label(win, text="粘贴简历内容，或选择文件导入：",
+              font=("微软雅黑", 9, "bold")).pack(anchor="w", padx=15, pady=(10, 5))
+
+        btn_frame = Frame(win)
+        btn_frame.pack(fill=X, padx=15)
+
+        def _load_from_file():
+            path = filedialog.askopenfilename(
+                title="选择简历文件",
+                filetypes=[("文本文件", "*.txt"), ("所有文件", "*.*")],
+            )
+            if path:
+                with open(path, "r", encoding="utf-8", errors="ignore") as f:
+                    txt.delete("1.0", END)
+                    txt.insert("1.0", f.read())
+                self.log(f"📄 已加载简历文件: {os.path.basename(path)}")
+
+        Button(btn_frame, text="📂 从文件导入", command=_load_from_file,
+               font=("微软雅黑", 9), width=14).pack(side=LEFT, padx=2)
+
+        # 显示当前状态
+        has_resume = self.resume_mgr.has_resume()
+        lbl_status = Label(btn_frame,
+                           text="✅ 简历已就绪" if has_resume else "⚠️ 未导入简历",
+                           font=("微软雅黑", 9), fg="green" if has_resume else "orange")
+        lbl_status.pack(side=RIGHT, padx=5)
+
+        # 文本编辑框
+        txt_frame = Frame(win)
+        txt_frame.pack(fill=BOTH, expand=True, padx=15, pady=5)
+        scroll_txt = Scrollbar(txt_frame)
+        txt = Text(txt_frame, font=("微软雅黑", 9), wrap=WORD,
+                   yscrollcommand=scroll_txt.set, height=12)
+        scroll_txt.config(command=txt.yview)
+        scroll_txt.pack(side=RIGHT, fill=Y)
+        txt.pack(side=LEFT, fill=BOTH, expand=True)
+
+        # 如果有已有简历，显示摘要
+        if has_resume:
+            summary = self.resume_mgr.get_profile_summary()
+            txt.insert("1.0", f"（当前已有简历数据，重新导入将覆盖）\n\n简历概要: {summary}")
+            txt.config(state=DISABLED)
+
+        # 按钮行
+        action_frame = Frame(win)
+        action_frame.pack(fill=X, padx=15, pady=8)
+
+        def _analyze_resume():
+            text = txt.get("1.0", END).strip()
+            if len(text) < 20:
+                messagebox.showwarning("提示", "简历内容太短，请粘贴完整的简历文本")
+                return
+            if not messagebox.askyesno("确认",
+                    "将使用 DeepSeek AI 分析简历并提取结构化信息，\n"
+                    "之后分析 JD 时会根据简历信息自动评分匹配度。\n\n"
+                    "继续吗？"):
+                return
+
+            btn_analyze.config(state=DISABLED, text="⏳ 分析中...")
+            self.log("📄 正在分析简历...")
+
+            def _do():
+                try:
+                    profile = self.resume_mgr.analyze_resume(
+                        text, self.config.deepseek_api_key, self.config.deepseek_model
+                    )
+                    self.root.after(0, lambda: _done(profile))
+                except Exception as e:
+                    self.root.after(0, lambda: _error(str(e)))
+
+            def _done(profile):
+                btn_analyze.config(state=NORMAL, text="✅ 分析并保存")
+                lbl_status.config(text="✅ 简历已就绪", fg="green")
+                self.lbl_resume.config(text=f"📄 {self.resume_mgr.get_profile_summary()}")
+                self.log(f"📄 简历分析完成: {profile.get('当前岗位', '?')} | {profile.get('技能清单', [])[:3]}")
+                messagebox.showinfo("完成", "简历分析完成！\n之后分析 JD 时将自动参考简历信息进行匹配度评分。")
+                win.destroy()
+
+            def _error(err):
+                btn_analyze.config(state=NORMAL, text="分析并保存")
+                messagebox.showerror("分析失败", str(err))
+
+            import threading
+            threading.Thread(target=_do, daemon=True).start()
+
+        btn_analyze = Button(
+            action_frame, text="🔍 分析并保存" if not has_resume else "🔄 重新分析",
+            command=_analyze_resume, font=("微软雅黑", 10), width=16, bg="#4a90d9", fg="white",
+        )
+        btn_analyze.pack(side=LEFT, padx=2)
+
+        if has_resume:
+            def _clear():
+                if messagebox.askyesno("确认", "确定清除简历数据？之后匹配度将恢复默认评分。"):
+                    self.resume_mgr.clear_resume()
+                    self.lbl_resume.config(text="📄 未导入简历")
+                    win.destroy()
+                    self.log("📄 简历数据已清除")
+
+            Button(action_frame, text="🗑 清除简历", command=_clear,
+                   font=("微软雅黑", 9), width=12).pack(side=RIGHT, padx=2)
+
     def _on_sync_done(self, result: dict):
         """同步完成回调"""
         if result.get("failed", 0) > 0:
@@ -674,7 +808,10 @@ class JDAnalyzerApp:
             max_retries=self.config.ai_max_retries,
         )
 
-        ai_result = ai.analyze_jd(raw_text)
+        resume_ctx = self.resume_mgr.build_matching_context()
+        if resume_ctx:
+            self.log(f"  📄 已使用简历数据辅助匹配度评分")
+        ai_result = ai.analyze_jd(raw_text, resume_context=resume_ctx)
         self.log(f"  📊 AI 分析完成: {ai_result.get('公司名称', '?')} — {ai_result.get('岗位名称', '?')}")
 
         # 4. 写入 Excel

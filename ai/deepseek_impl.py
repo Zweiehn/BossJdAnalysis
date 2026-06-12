@@ -59,12 +59,24 @@ class DeepSeekAI(BaseAI):
         self.max_retries = max_retries
         self.base_url = "https://api.deepseek.com/v1/chat/completions"
 
-    def analyze_jd(self, raw_text: str) -> dict:
+    def _build_messages(self, raw_text: str, resume_context: str = "") -> list:
+        """构建消息列表，如有简历数据则用于匹配度评分"""
+        system = SYSTEM_PROMPT
+        if resume_context:
+            system += f"\n\n{resume_context}\n\n## 匹配度评分要求：\n请将上面的「我的简历信息」与当前JD进行对比，按以下标准给出「个人匹配度」：\n- 9-10：JD要求与简历高度匹配（技能、经验、学历都吻合）\n- 7-8：大部分匹配，少量差距\n- 5-6：部分匹配，有可迁移经验\n- 3-4：少量匹配，需要较大转型\n- 1-2：基本不匹配\n在「个人备注」中简要说明评分理由。"
+
+        return [
+            {"role": "system", "content": system},
+            {"role": "user", "content": f"请分析以下招聘JD文本，提取结构化信息：\n\n{raw_text}"},
+        ]
+
+    def analyze_jd(self, raw_text: str, resume_context: str = "") -> dict:
         """
         分析JD文本，返回结构化JSON数据
 
         Args:
             raw_text: OCR 提取的原始文本
+            resume_context: 简历上下文（用于匹配度评分），空字符串则不使用
 
         Returns:
             结构化数据字典
@@ -83,10 +95,7 @@ class DeepSeekAI(BaseAI):
 
         payload = {
             "model": self.model,
-            "messages": [
-                {"role": "system", "content": SYSTEM_PROMPT},
-                {"role": "user", "content": f"请分析以下招聘JD文本，提取结构化信息：\n\n{raw_text}"},
-            ],
+            "messages": self._build_messages(raw_text, resume_context),
             "temperature": self.temperature,
             "response_format": {"type": "json_object"},
         }
