@@ -23,53 +23,61 @@ class ExcelWriter:
             return path
         return os.path.join(get_app_dir(), path)
 
+    _NARROW_FIELDS = {"原始JD文本": 35}
+
+    def _get_headers(self, ws) -> list:
+        """读取 Excel 当前的表头行"""
+        headers = []
+        for col in range(1, ws.max_column + 1):
+            h = ws.cell(1, col).value
+            if h is not None:
+                headers.append(str(h).strip())
+        return headers
+
     def _ensure_headers(self, ws):
-        """确保表头存在（如果行为空则写入）"""
-        if ws.max_row == 0 or all(ws.cell(1, c).value is None for c in range(1, len(FIELD_ORDER) + 1)):
-            # 写入表头
-            header_font = Font(bold=True, size=11)
-            header_fill = PatternFill(start_color="D9E1F2", end_color="D9E1F2", fill_type="solid")
-            header_align = Alignment(horizontal="center", vertical="center", wrap_text=True)
+        """首次创建：写入完整表头"""
+        header_font = Font(bold=True, size=11)
+        header_fill = PatternFill(start_color="D9E1F2", end_color="D9E1F2", fill_type="solid")
+        header_align = Alignment(horizontal="center", vertical="center", wrap_text=True)
 
-            for col_idx, field_name in enumerate(FIELD_ORDER, 1):
-                cell = ws.cell(1, col_idx, field_name)
-                cell.font = header_font
-                cell.fill = header_fill
-                cell.alignment = header_align
+        for col_idx, field_name in enumerate(FIELD_ORDER, 1):
+            cell = ws.cell(1, col_idx, field_name)
+            cell.font = header_font
+            cell.fill = header_fill
+            cell.alignment = header_align
 
-    # 需要限制宽度的长文本列（1-based Excel列号）
-    _NARROW_COLUMNS = {
-        21: 35,   # 原始JD文本 — 窄列宽，靠换行显示全文
-    }
-
-    def _auto_column_width(self, ws):
-        """自动调整列宽（长文本列固定窄宽，靠自动换行）"""
-        for col_idx in range(1, len(FIELD_ORDER) + 1):
+    def _auto_column_width(self, ws, headers: list):
+        """自动调整列宽"""
+        for col_idx, header in enumerate(headers, 1):
             col_letter = get_column_letter(col_idx)
 
-            # 长文本列用固定窄宽
-            if col_idx in self._NARROW_COLUMNS:
-                ws.column_dimensions[col_letter].width = self._NARROW_COLUMNS[col_idx]
+            # 长文本列固定窄宽
+            if header in self._NARROW_FIELDS:
+                ws.column_dimensions[col_letter].width = self._NARROW_FIELDS[header]
                 continue
 
             max_length = 0
             for row in ws.iter_rows(min_col=col_idx, max_col=col_idx, values_only=False):
                 for cell in row:
                     if cell.value:
-                        cell_len = 0
-                        for char in str(cell.value):
-                            cell_len += 2 if '一' <= char <= '鿿' else 1
+                        cell_len = sum(2 if '一' <= c <= '鿿' else 1 for c in str(cell.value))
                         max_length = max(max_length, cell_len)
 
-            adjusted = min(max(max_length + 2, 8), 45)
-            ws.column_dimensions[col_letter].width = adjusted
+            ws.column_dimensions[col_letter].width = min(max(max_length + 2, 8), 45)
+
+    def _record_to_row(self, record: JDRecord, headers: list) -> list:
+        """将 JDRecord 的值按 Excel 表头顺序映射，自定义字段留空"""
+        record_dict = {}
+        for f in FIELD_ORDER:
+            record_dict[f] = getattr(record, f, "")
+        return [record_dict.get(h, "") for h in headers]
 
     def append_record(self, record: JDRecord):
         """
-        追加一条记录到 Excel
+        追加一条记录到 Excel（动态映射表头，支持用户自定义字段）
 
         Args:
-            record: JD记录对象
+            record: JDRecord 对象
         """
         with self._lock:
             excel_path = self._get_excel_path()
@@ -80,50 +88,37 @@ class ExcelWriter:
                     wb = load_workbook(excel_path)
                     ws = wb.active
                 except PermissionError:
-                    raise PermissionError(
-                        f"无法写入 Excel，请先关闭文件: {excel_path}"
-                    )
+                    raise PermissionError(f"无法写入 Excel，请先关闭文件: {excel_path}")
             else:
                 wb = Workbook()
                 ws = wb.active
                 ws.title = "JD记录"
-
-            # 确保表头存在
-            if not file_exists:
                 self._ensure_headers(ws)
 
-            # 追加数据行
-            row_data = record.to_list()
+            headers = self._get_headers(ws)
+            row_data = self._record_to_row(record, headers)
             ws.append(row_data)
 
-            # 设置新行的对齐方式（原始JD文本列不换行，防止撑高行）
+            # 设置新行对齐 + 超链接
             new_row = ws.max_row
-            for col_idx in range(1, len(FIELD_ORDER) + 1):
+            for col_idx, header in enumerate(headers, 1):
                 cell = ws.cell(new_row, col_idx)
                 cell.alignment = Alignment(
                     vertical="center",
-                    wrap_text=(col_idx != 21)  # 21=原始JD文本，不换行
+                    wrap_text=(header not in self._NARROW_FIELDS),
                 )
+                # 截图文件列设超链接
+                if header == "截图文件" and cell.value:
+                    cell.hyperlink = str(cell.value)
 
-            # 截图文件列设为可点击的超链接
-            screenshot_cell = ws.cell(new_row, 22)
-            if screenshot_cell.value:
-                screenshot_cell.hyperlink = str(screenshot_cell.value)
-
-            # 调整列宽（仅首次或隔段时间做）
-            self._auto_column_width(ws)
-
-            # 冻结首行
+            self._auto_column_width(ws, headers)
             ws.freeze_panes = "A2"
 
-            # 保存
             try:
                 wb.save(excel_path)
                 print(f"数据已写入: {excel_path} (第{new_row - 1}条)")
             except PermissionError:
-                raise PermissionError(
-                    f"保存 Excel 失败，请先关闭文件: {excel_path}"
-                )
+                raise PermissionError(f"保存 Excel 失败，请先关闭文件: {excel_path}")
 
     def append_records(self, records: list):
         """批量追加记录"""

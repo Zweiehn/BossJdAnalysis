@@ -24,6 +24,7 @@ from ocr.paddle_subprocess_impl import PaddleSubprocessEngine
 from ai.deepseek_impl import DeepSeekAI
 from feishu_sync import FeishuSyncer
 from resume_manager import ResumeManager
+from priority_manager import PriorityManager
 
 
 class JDAnalyzerApp:
@@ -40,6 +41,7 @@ class JDAnalyzerApp:
         self.screenshot_mgr = ScreenshotManager(self.config)
         self.excel_writer = ExcelWriter(self.config)
         self.resume_mgr = ResumeManager(self.config)
+        self.priority_mgr = PriorityManager(self.config)
 
         # OCR 引擎 (延迟初始化)
         self.ocr_engine = None
@@ -105,6 +107,12 @@ class JDAnalyzerApp:
         )
         self.btn_resume.pack(side=LEFT, padx=2)
 
+        self.btn_priority = Button(
+            toolbar, text="🏷 优先级", command=self._config_priority,
+            width=10, height=1, font=("微软雅黑", 10),
+        )
+        self.btn_priority.pack(side=LEFT, padx=2)
+
         self.btn_config = Button(
             toolbar, text="⚙ 配置", command=self._open_config_window,
             width=8, height=1, font=("微软雅黑", 10),
@@ -140,6 +148,14 @@ class JDAnalyzerApp:
             font=("微软雅黑", 8), anchor="w", fg="#888",
         )
         self.lbl_resume.pack(fill=X)
+
+        # 优先级规则状态
+        self.lbl_priority = Label(
+            status_frame,
+            text=f"🏷 {self.priority_mgr.get_summary()}",
+            font=("微软雅黑", 8), anchor="w", fg="#888",
+        )
+        self.lbl_priority.pack(fill=X)
 
         # ── 文件列表 ──
         list_frame = Frame(self.root, padx=10, pady=4)
@@ -578,6 +594,184 @@ class JDAnalyzerApp:
             Button(action_frame, text="🗑 清除简历", command=_clear,
                    font=("微软雅黑", 9), width=12).pack(side=RIGHT, padx=2)
 
+    # ──────────────── 优先级配置 ────────────────
+
+    _PRIORITY_LEVELS = ["优先", "观望", "谨慎", "排除"]
+    _OPERATORS = [
+        ("等于", "=="), ("大于", ">"), ("大于等于", ">="),
+        ("小于", "<"), ("小于等于", "<="), ("包含", "contains"),
+    ]
+
+    def _config_priority(self):
+        """优先级分组规则配置"""
+        win = Toplevel(self.root)
+        win.title("优先级规则配置")
+        win.geometry("680x500")
+        win.minsize(600, 400)
+        win.transient(self.root)
+        win.grab_set()
+
+        rules = self.priority_mgr.load_rules()
+        groups = rules.get("groups", [])
+
+        # ── 顶部提示 ──
+        Label(win, text="优先级分组规则：AI根据以下条件自动评判每条JD的优先级",
+              font=("微软雅黑", 9, "bold"), fg="#555").pack(anchor="w", padx=15, pady=(10, 2))
+
+        # ── 规则列表（可滚动）──
+        canvas = Canvas(win, highlightthickness=0)
+        scrollbar = Scrollbar(win, orient="vertical", command=canvas.yview)
+        scroll_frame = Frame(canvas, padx=10, pady=5)
+        scroll_frame.bind("<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
+        canvas.create_window((0, 0), window=scroll_frame, anchor="nw")
+        canvas.configure(yscrollcommand=scrollbar.set)
+        canvas.pack(side=LEFT, fill=BOTH, expand=True)
+        scrollbar.pack(side=RIGHT, fill=Y)
+
+        # 存储所有分组 UI 控件
+        group_widgets = []
+
+        def _render_groups():
+            for w in group_widgets:
+                w.destroy()
+            group_widgets.clear()
+
+            for gi, group in enumerate(groups):
+                f = LabelFrame(scroll_frame, text=f"分组 {gi+1}: {group.get('name', '未命名')}",
+                               font=("微软雅黑", 9, "bold"), padx=10, pady=5)
+                f.pack(fill=X, pady=4)
+                group_widgets.append(f)
+
+                # 第一行：分组名 + 级别 + 逻辑
+                row1 = Frame(f)
+                row1.pack(fill=X)
+                Label(row1, text="分组名:", font=("微软雅黑", 9)).pack(side=LEFT)
+                e_name = Entry(row1, font=("Consolas", 9), width=14)
+                e_name.insert(0, group.get("name", ""))
+                e_name.pack(side=LEFT, padx=4)
+                setattr(f, "_name", e_name)
+
+                Label(row1, text="级别:", font=("微软雅黑", 9)).pack(side=LEFT, padx=(10, 0))
+                cb_level = ttk.Combobox(row1, values=self._PRIORITY_LEVELS, width=8, state="readonly")
+                cb_level.set(group.get("level", "观望"))
+                cb_level.pack(side=LEFT, padx=4)
+                setattr(f, "_level", cb_level)
+
+                Label(row1, text="逻辑:", font=("微软雅黑", 9)).pack(side=LEFT, padx=(10, 0))
+                cb_logic = ttk.Combobox(row1, values=["全部满足(AND)", "任一满足(OR)"], width=14, state="readonly")
+                cb_logic.set("全部满足(AND)" if group.get("logic", "and") == "and" else "任一满足(OR)")
+                cb_logic.pack(side=LEFT, padx=4)
+                setattr(f, "_logic", cb_logic)
+
+                # 规则列表
+                for ri, rule in enumerate(group.get("rules", [])):
+                    rframe = Frame(f)
+                    rframe.pack(fill=X, pady=2)
+                    setattr(f, f"_rule_{ri}", rframe)
+
+                    Label(rframe, text=f"  条件{ri+1}:", font=("微软雅黑", 8)).pack(side=LEFT)
+                    e_field = Entry(rframe, font=("Consolas", 8), width=12)
+                    e_field.insert(0, rule.get("field", ""))
+                    e_field.pack(side=LEFT, padx=2)
+                    setattr(rframe, "_field", e_field)
+
+                    cb_op = ttk.Combobox(rframe, values=[o[1] for o in self._OPERATORS], width=10, state="readonly")
+                    cb_op.set(rule.get("operator", "=="))
+                    cb_op.pack(side=LEFT, padx=2)
+                    setattr(rframe, "_op", cb_op)
+
+                    e_val = Entry(rframe, font=("Consolas", 8), width=20)
+                    e_val.insert(0, rule.get("value", ""))
+                    e_val.pack(side=LEFT, padx=2)
+                    setattr(rframe, "_val", e_val)
+
+                    def _del_rule(g=gi, r=ri):
+                        groups[g]["rules"].pop(r)
+                        _render_groups()
+
+                    Button(rframe, text="✕", font=("", 8), width=2,
+                           command=_del_rule).pack(side=RIGHT, padx=2)
+
+                # 添加规则 + 删除分组按钮
+                btn_row = Frame(f)
+                btn_row.pack(fill=X, pady=(4, 0))
+
+                def _add_rule(g=gi):
+                    groups[g].setdefault("rules", []).append({"field": "", "operator": "==", "value": ""})
+                    _render_groups()
+
+                Button(btn_row, text="+ 添加条件", font=("微软雅黑", 8), width=12,
+                       command=_add_rule).pack(side=LEFT, padx=2)
+
+                def _del_group(g=gi):
+                    groups.pop(g)
+                    _render_groups()
+
+                Button(btn_row, text="🗑 删除分组", font=("微软雅黑", 8), width=12,
+                       command=_del_group).pack(side=RIGHT, padx=2)
+
+            # 添加分组按钮
+            add_frame = Frame(scroll_frame)
+            add_frame.pack(fill=X, pady=10)
+            group_widgets.append(add_frame)
+
+            def _add_group():
+                groups.append({
+                    "name": "新分组",
+                    "level": "观望",
+                    "logic": "and",
+                    "rules": [{"field": "", "operator": "==", "value": ""}],
+                })
+                _render_groups()
+
+            Button(add_frame, text="➕ 添加分组", font=("微软雅黑", 10), width=16,
+                   command=_add_group, bg="#4a90d9", fg="white").pack()
+
+        _render_groups()
+
+        # ── 底部操作 ──
+        def _save():
+            # 从 UI 读取数据
+            gi = 0
+            for w in group_widgets:
+                if not hasattr(w, "_name"):
+                    continue
+                groups[gi]["name"] = w._name.get().strip() or f"分组{gi+1}"
+                groups[gi]["level"] = w._level.get()
+                groups[gi]["logic"] = "and" if "全部" in w._logic.get() else "or"
+
+                ri = 0
+                while hasattr(w, f"_rule_{ri}"):
+                    rf = getattr(w, f"_rule_{ri}")
+                    rule = groups[gi]["rules"][ri]
+                    rule["field"] = rf._field.get().strip()
+                    rule["operator"] = rf._op.get()
+                    rule["value"] = rf._val.get().strip()
+                    ri += 1
+                gi += 1
+
+            self.priority_mgr.save_rules({"groups": groups})
+            self.lbl_priority.config(text=f"🏷 {self.priority_mgr.get_summary()}")
+            self.log(f"🏷 优先级规则已保存 ({len(groups)}个分组)")
+            canvas.unbind_all("<MouseWheel>")
+            win.destroy()
+            messagebox.showinfo("完成", f"优先级规则已保存！共 {len(groups)} 个分组。\n下次分析JD时自动生效。")
+
+        btn_frame = Frame(win)
+        btn_frame.pack(fill=X, padx=15, pady=10)
+        Button(btn_frame, text="💾 保存", command=_save,
+               font=("微软雅黑", 10), width=14, bg="#4a90d9", fg="white").pack(side=LEFT, padx=2)
+
+        def _clear_all():
+            if messagebox.askyesno("确认", "确定清除所有优先级规则？"):
+                self.priority_mgr.clear_rules()
+                self.lbl_priority.config(text=f"🏷 {self.priority_mgr.get_summary()}")
+                self.log("🏷 优先级规则已清除")
+                win.destroy()
+
+        Button(btn_frame, text="🗑 清除全部", command=_clear_all,
+               font=("微软雅黑", 9), width=12).pack(side=RIGHT, padx=2)
+
     def _on_sync_done(self, result: dict):
         """同步完成回调"""
         if result.get("failed", 0) > 0:
@@ -847,10 +1041,20 @@ class JDAnalyzerApp:
             max_retries=self.config.ai_max_retries,
         )
 
+        # 构建辅助上下文
         resume_ctx = self.resume_mgr.build_matching_context()
+        priority_ctx = self.priority_mgr.build_priority_prompt()
+
         if resume_ctx:
             self.log(f"  📄 已使用简历数据辅助匹配度评分")
-        ai_result = ai.analyze_jd(raw_text, resume_context=resume_ctx)
+        if priority_ctx:
+            self.log(f"  🏷 已使用优先级分组规则评判")
+
+        ai_result = ai.analyze_jd(
+            raw_text,
+            resume_context=resume_ctx,
+            priority_context=priority_ctx,
+        )
         self.log(f"  📊 AI 分析完成: {ai_result.get('公司名称', '?')} — {ai_result.get('岗位名称', '?')}")
 
         # 4. 写入 Excel
