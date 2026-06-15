@@ -606,8 +606,9 @@ class JDAnalyzerApp:
         """优先级分组规则配置"""
         win = Toplevel(self.root)
         win.title("优先级规则配置")
-        win.geometry("680x500")
-        win.minsize(600, 400)
+        win.geometry("720x560")
+        win.minsize(640, 420)
+        win.resizable(True, True)
         win.transient(self.root)
         win.grab_set()
 
@@ -615,18 +616,35 @@ class JDAnalyzerApp:
         groups = rules.get("groups", [])
 
         # ── 顶部提示 ──
-        Label(win, text="优先级分组规则：AI根据以下条件自动评判每条JD的优先级",
-              font=("微软雅黑", 9, "bold"), fg="#555").pack(anchor="w", padx=15, pady=(10, 2))
+        top = Frame(win)
+        top.pack(fill=X, padx=15, pady=(10, 2))
+        Label(top, text="优先级分组规则：AI根据以下条件自动评判每条JD的优先级",
+              font=("微软雅黑", 9, "bold"), fg="#555").pack(anchor="w")
 
-        # ── 规则列表（可滚动）──
-        canvas = Canvas(win, highlightthickness=0)
+        # ── 可滚动规则列表 ──
+        canvas = Canvas(win, highlightthickness=0, bg="#f0f0f0")
         scrollbar = Scrollbar(win, orient="vertical", command=canvas.yview)
         scroll_frame = Frame(canvas, padx=10, pady=5)
         scroll_frame.bind("<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
-        canvas.create_window((0, 0), window=scroll_frame, anchor="nw")
+        canvas.create_window((0, 0), window=scroll_frame, anchor="nw", tags="inner")
         canvas.configure(yscrollcommand=scrollbar.set)
+
+        def _on_mw(event):
+            canvas.yview_scroll(-1 * (event.delta // 120), "units")
+
+        def _bind_mw(event=None):
+            canvas.bind_all("<MouseWheel>", _on_mw)
+
+        def _unbind_mw():
+            canvas.unbind_all("<MouseWheel>")
+
+        canvas.bind("<Enter>", lambda e: _bind_mw())
+        canvas.bind("<Leave>", lambda e: _unbind_mw())
+        win.protocol("WM_DELETE_WINDOW", lambda: (_unbind_mw(), win.destroy()))
+
         canvas.pack(side=LEFT, fill=BOTH, expand=True)
         scrollbar.pack(side=RIGHT, fill=Y)
+        _bind_mw()
 
         # 存储所有分组 UI 控件
         group_widgets = []
@@ -635,6 +653,7 @@ class JDAnalyzerApp:
             for w in group_widgets:
                 w.destroy()
             group_widgets.clear()
+            canvas.yview_moveto(0)  # 滚动到顶部
 
             for gi, group in enumerate(groups):
                 f = LabelFrame(scroll_frame, text=f"分组 {gi+1}: {group.get('name', '未命名')}",
@@ -767,6 +786,7 @@ class JDAnalyzerApp:
                 self.priority_mgr.clear_rules()
                 self.lbl_priority.config(text=f"🏷 {self.priority_mgr.get_summary()}")
                 self.log("🏷 优先级规则已清除")
+                _unbind_mw()
                 win.destroy()
 
         Button(btn_frame, text="🗑 清除全部", command=_clear_all,
