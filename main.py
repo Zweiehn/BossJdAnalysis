@@ -20,7 +20,7 @@ from config import Config, get_app_dir
 from models import JDRecord
 from screenshot_manager import ScreenshotManager
 from excel_writer import ExcelWriter
-from ocr.paddle_subprocess_impl import PaddleSubprocessEngine
+from ocr.windows_ocr_impl import WindowsOCREngine
 from ai.deepseek_impl import DeepSeekAI
 from feishu_sync import FeishuSyncer
 from resume_manager import ResumeManager
@@ -606,8 +606,8 @@ class JDAnalyzerApp:
         """优先级分组规则配置"""
         win = Toplevel(self.root)
         win.title("优先级规则配置")
-        win.geometry("720x560")
-        win.minsize(640, 420)
+        win.geometry("760x620")
+        win.minsize(680, 480)
         win.resizable(True, True)
         win.transient(self.root)
         win.grab_set()
@@ -776,10 +776,12 @@ class JDAnalyzerApp:
             win.destroy()
             messagebox.showinfo("完成", f"优先级规则已保存！共 {len(groups)} 个分组。\n下次分析JD时自动生效。")
 
+        sep = Frame(win, height=2, bg="#ccc")
+        sep.pack(fill=X, padx=15)
         btn_frame = Frame(win)
-        btn_frame.pack(fill=X, padx=15, pady=10)
+        btn_frame.pack(fill=X, padx=15, pady=(8, 12))
         Button(btn_frame, text="💾 保存", command=_save,
-               font=("微软雅黑", 10), width=14, bg="#4a90d9", fg="white").pack(side=LEFT, padx=2)
+               font=("微软雅黑", 10), width=12, bg="#4a90d9", fg="white").pack(side=LEFT, padx=3)
 
         def _clear_all():
             if messagebox.askyesno("确认", "确定清除所有优先级规则？"):
@@ -907,9 +909,21 @@ class JDAnalyzerApp:
         frame_path.pack(fill=X, pady=3)
 
         Label(frame_path, text="截图保存目录:", font=("微软雅黑", 9)).pack(anchor="w", pady=(5, 2))
-        entry_ssdir = Entry(frame_path, font=("Consolas", 10))
-        entry_ssdir.pack(fill=X)
-        entry_ssdir.insert(0, self.config.screenshot_dir)
+        fs_row = Frame(frame_path)
+        fs_row.pack(fill=X)
+        entry_ssdir = Entry(fs_row, font=("Consolas", 10))
+        entry_ssdir.pack(side=LEFT, fill=X, expand=True)
+        # 显示完整路径
+        _ss_raw = self.config.screenshot_dir
+        _ss_full = _ss_raw if os.path.isabs(_ss_raw) else os.path.join(get_app_dir(), _ss_raw)
+        entry_ssdir.insert(0, _ss_full)
+        def _browse_ss():
+            p = filedialog.askdirectory(title="选择截图保存目录")
+            if p:
+                entry_ssdir.delete(0, END)
+                entry_ssdir.insert(0, p)
+        Button(fs_row, text="📂 浏览", command=_browse_ss,
+               font=("微软雅黑", 8), width=6).pack(side=RIGHT, padx=(4, 0))
 
         # ── 保存按钮 ──
         def save_config():
@@ -1036,7 +1050,7 @@ class JDAnalyzerApp:
             # 本地脚本 → 直接使用 PaddleOCR（高性能）
             # 打包 exe → 子进程模式（避免打包问题）
             if getattr(sys, "frozen", False):
-                engine_cls = PaddleSubprocessEngine
+                engine_cls = WindowsOCREngine
             else:
                 from ocr.paddle_ocr_impl import PaddleOCREngine
                 engine_cls = PaddleOCREngine

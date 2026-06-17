@@ -24,16 +24,17 @@ class PaddleSubprocessEngine(BaseOCR):
         self._python_cmd = python_cmd or self._find_python()
 
     def _find_python(self) -> str:
-        """查找系统 Python"""
+        """查找系统 Python（exe模式下跳过内部Python）"""
         candidates = [
-            sys.executable,           # 当前 Python（exe 内置的）
             "python",
             "python3",
-            r"C:\Users\86137\AppData\Local\Programs\Python\Python312\python.exe",
             r"C:\Python312\python.exe",
             r"C:\Python311\python.exe",
             r"C:\Python310\python.exe",
         ]
+        # 脚本模式才加入当前 Python
+        if not getattr(sys, "frozen", False):
+            candidates.insert(0, sys.executable)
         for cmd in candidates:
             try:
                 r = subprocess.run([cmd, "--version"], capture_output=True, text=True, timeout=5)
