@@ -1,17 +1,18 @@
 """Tesseract OCR 实现 - 轻量级 OCR 引擎，适合 PyInstaller 打包"""
 
 import os
+import sys
 import subprocess
 from .base import BaseOCR
 
 
 class TesseractEngine(BaseOCR):
-    """Tesseract OCR 引擎封装，支持中文识别"""
+    """Tesseract OCR 引擎封装，支持中文识别，支持 exe 内嵌便携版"""
 
     def __init__(self, tesseract_path: str = None, lang: str = "chi_sim+eng"):
         """
         Args:
-            tesseract_path: tesseract.exe 路径，None 则从 PATH 查找
+            tesseract_path: tesseract.exe 路径，None 则自动查找
             lang: 识别语言，默认中文+英文
         """
         self._tesseract_cmd = tesseract_path or self._find_tesseract()
@@ -19,22 +20,34 @@ class TesseractEngine(BaseOCR):
         self._pytesseract = None
 
     def _find_tesseract(self) -> str:
-        """查找 tesseract 可执行文件"""
-        # 1. 检查 exe 同目录下的 tesseract/
-        base = os.path.dirname(os.path.abspath(__file__))
-        for _ in range(3):
-            parent = os.path.dirname(base)
-            if os.path.exists(os.path.join(parent, "tesseract", "tesseract.exe")):
-                return os.path.join(parent, "tesseract", "tesseract.exe")
-            base = parent
+        """查找 tesseract 可执行文件（优先 exe 同目录的便携版）"""
+        frozen = getattr(sys, "frozen", False)
+        app_dir = os.path.dirname(sys.executable) if frozen else os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        internal_dir = os.path.join(app_dir, "_internal") if frozen else ""
 
-        # 2. 环境变量
+        # 检测路径列表
+        candidates = []
+        # exe 同目录
+        candidates.append(os.path.join(app_dir, "tesseract_portable", "tesseract.exe"))
+        candidates.append(os.path.join(app_dir, "tesseract", "tesseract.exe"))
+        # _internal 目录（PyInstaller 打包）
+        if internal_dir:
+            candidates.append(os.path.join(internal_dir, "tesseract_portable", "tesseract.exe"))
+            candidates.append(os.path.join(internal_dir, "tesseract", "tesseract.exe"))
+        # exe 同目录下的多种命名
+        candidates.append(os.path.join(app_dir, "tesseract.exe"))
+
+        for c in candidates:
+            if os.path.exists(c):
+                return c
+
+        # 3. 环境变量
         for p in os.environ.get("PATH", "").split(";"):
             exe = os.path.join(p, "tesseract.exe")
             if os.path.exists(exe):
                 return exe
 
-        # 3. 默认路径
+        # 4. 默认安装路径
         candidates = [
             r"C:\Program Files\Tesseract-OCR\tesseract.exe",
             r"C:\Program Files (x86)\Tesseract-OCR\tesseract.exe",
@@ -45,12 +58,36 @@ class TesseractEngine(BaseOCR):
 
         return "tesseract"  # 最后尝试从 PATH 调用
 
+    def _get_tessdata_dir(self) -> str:
+        """获取 tessdata 目录路径（搜索 exe 同目录和 _internal）"""
+        search_dirs = [
+            os.path.dirname(self._tesseract_cmd),  # tesseract 所在目录
+            os.path.join(os.path.dirname(self._tesseract_cmd), ".."),  # 上级目录
+        ]
+        frozen = getattr(sys, "frozen", False)
+        if frozen:
+            app_dir = os.path.dirname(sys.executable)
+            search_dirs.extend([
+                os.path.join(app_dir, "tesseract_portable"),
+                os.path.join(app_dir, "_internal", "tesseract_portable"),
+                os.path.join(app_dir, "_internal"),
+            ])
+        for d in search_dirs:
+            tessdata = os.path.join(d, "tessdata")
+            if os.path.exists(os.path.join(tessdata, "chi_sim.traineddata")):
+                return os.path.abspath(tessdata)
+        return ""
+
     def _lazy_init(self):
         """延迟初始化 pytesseract"""
         if self._pytesseract is None:
             try:
                 import pytesseract
                 pytesseract.pytesseract.tesseract_cmd = self._tesseract_cmd
+                # 设置语言数据目录（便携版）
+                td = self._get_tessdata_dir()
+                if td:
+                    os.environ["TESSDATA_PREFIX"] = td
                 self._pytesseract = pytesseract
             except ImportError:
                 raise RuntimeError(
@@ -72,19 +109,22 @@ class TesseractEngine(BaseOCR):
 
         self._lazy_init()
 
+        env = os.environ.copy()
+        td = self._get_tessdata_dir()
+        if td:
+            env["TESSDATA_PREFIX"] = td
+
         try:
-            # 先尝试用 pytesseract
             text = self._pytesseract.image_to_string(
                 image_path, lang=self._lang
             )
             return text.strip()
 
-        except Exception as e:
-            # 如果 pytesseract 失败，回退到 subprocess 直接调用
+        except Exception:
             try:
                 result = subprocess.run(
                     [self._tesseract_cmd, image_path, "stdout", "-l", self._lang],
-                    capture_output=True, text=True, timeout=60,
+                    capture_output=True, text=True, timeout=60, env=env,
                 )
                 if result.returncode == 0:
                     return result.stdout.strip()

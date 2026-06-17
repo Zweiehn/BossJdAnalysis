@@ -20,7 +20,7 @@ from config import Config, get_app_dir
 from models import JDRecord
 from screenshot_manager import ScreenshotManager
 from excel_writer import ExcelWriter
-from ocr.windows_ocr_impl import WindowsOCREngine
+from ocr.tesseract_impl import TesseractEngine
 from ai.deepseek_impl import DeepSeekAI
 from feishu_sync import FeishuSyncer
 from resume_manager import ResumeManager
@@ -1050,7 +1050,7 @@ class JDAnalyzerApp:
             # 本地脚本 → 直接使用 PaddleOCR（高性能）
             # 打包 exe → 子进程模式（避免打包问题）
             if getattr(sys, "frozen", False):
-                engine_cls = WindowsOCREngine
+                engine_cls = TesseractEngine
             else:
                 from ocr.paddle_ocr_impl import PaddleOCREngine
                 engine_cls = PaddleOCREngine
